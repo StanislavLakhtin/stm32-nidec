@@ -11,16 +11,14 @@
 #include <stdio.h>
 #include <errno.h>
 
-#define MOTOR_PORTA GPIOA
+#define MOTOR_PORT GPIOA
 #define MOTOR_A0 GPIO8
 #define MOTOR_A1 GPIO9
-#define MOTOR_PORTB GPIOA
 #define MOTOR_B0 GPIO10
 #define MOTOR_B1 GPIO11
 
 static uint8_t halfStep[8][4] = {{1,0,0,0}, {1,0,1,0}, {0,0,1,0}, {0,1,1,0},
                                     {0,1,0,0}, {0,1,0,1},{0,0,0,1},{1,0,0,1}};
-static uint8_t fullStep[4][4] = {{1,0,1,0}, {0,1,1,0}, {0,1,0,1}, {1,0,0,1}};
 
 static void clock_setup(void) {
   rcc_clock_setup_in_hse_8mhz_out_72mhz();
@@ -82,12 +80,9 @@ static void pcd8544_setup(void) {
 
 static void gpio_setup(void) {
   /* Configure GPIOs */
-  gpio_set_mode(MOTOR_PORTA, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_PUSHPULL,
-                MOTOR_A0 | MOTOR_A1);
-  gpio_set_mode(MOTOR_PORTB, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_PUSHPULL,
-                MOTOR_B0 | MOTOR_B1);
-  gpio_clear(MOTOR_PORTA, MOTOR_A0 | MOTOR_A1);
-  gpio_clear(MOTOR_PORTB, MOTOR_B0 | MOTOR_B1);
+  gpio_set_mode(MOTOR_PORT, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_PUSHPULL,
+                MOTOR_A0 | MOTOR_A1 | MOTOR_B0 | MOTOR_B1);
+  gpio_clear(MOTOR_PORT, MOTOR_A0 | MOTOR_A1 | MOTOR_B0 | MOTOR_B1);
 }
 
 int _write(int file, char *ptr, int len) {
@@ -130,10 +125,10 @@ void motorStep(uint8_t state[4]) {
     swprintf(buffer, 50, L"%d", state[i]);
     pcd8544_drawText(i*8, 0, BLACK, buffer);
   }
-  motorPinToggle(state[0], MOTOR_PORTA, MOTOR_A0);
-  motorPinToggle(state[1], MOTOR_PORTA, MOTOR_A1);
-  motorPinToggle(state[2], MOTOR_PORTB, MOTOR_B0);
-  motorPinToggle(state[3], MOTOR_PORTB, MOTOR_B1);
+  motorPinToggle(state[0], MOTOR_PORT, MOTOR_A0);
+  motorPinToggle(state[1], MOTOR_PORT, MOTOR_A1);
+  motorPinToggle(state[2], MOTOR_PORT, MOTOR_B0);
+  motorPinToggle(state[3], MOTOR_PORT, MOTOR_B1);
 }
 
 int main(void) {
