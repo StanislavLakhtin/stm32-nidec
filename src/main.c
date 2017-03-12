@@ -8,9 +8,19 @@
 #include <libopencm3/stm32/spi.h>
 #include <libopencm3/stm32/f1/nvic.h>
 #include <pcd8544.h>
-#include <mhz19.h>
 #include <stdio.h>
 #include <errno.h>
+
+#define MOTOR_PORTA GPIOA
+#define MOTOR_A0 GPIO8
+#define MOTOR_A1 GPIO9
+#define MOTOR_PORTB GPIOA
+#define MOTOR_B0 GPIO10
+#define MOTOR_B1 GPIO11
+
+static uint8_t halfStep[8][4] = {{1,0,0,0}, {1,0,1,0}, {0,0,1,0}, {0,1,1,0},
+                                    {0,1,0,0}, {0,1,0,1},{0,0,0,1},{1,0,0,1}};
+static uint8_t fullStep[4][4] = {{1,0,1,0}, {0,1,1,0}, {0,1,0,1}, {1,0,0,1}};
 
 static void clock_setup(void) {
   rcc_clock_setup_in_hse_8mhz_out_72mhz();
@@ -70,6 +80,16 @@ static void pcd8544_setup(void) {
 
 }
 
+static void gpio_setup(void) {
+  /* Configure GPIOs */
+  gpio_set_mode(MOTOR_PORTA, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_PUSHPULL,
+                MOTOR_A0 | MOTOR_A1);
+  gpio_set_mode(MOTOR_PORTB, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_PUSHPULL,
+                MOTOR_B0 | MOTOR_B1);
+  gpio_clear(MOTOR_PORTA, MOTOR_A0 | MOTOR_A1);
+  gpio_clear(MOTOR_PORTB, MOTOR_B0 | MOTOR_B1);
+}
+
 int _write(int file, char *ptr, int len) {
   int i;
 
@@ -80,15 +100,6 @@ int _write(int file, char *ptr, int len) {
   }
   errno = EIO;
   return -1;
-}
-
-static void mhz19_setup(void) {
-  nvic_enable_irq(NVIC_USART3_IRQ);
-
-  gpio_set_mode(GPIOB, GPIO_MODE_OUTPUT_50_MHZ,
-                GPIO_CNF_OUTPUT_ALTFN_PUSHPULL, GPIO_USART3_TX);
-  gpio_set_mode(GPIOB, GPIO_MODE_INPUT,
-                GPIO_CNF_INPUT_PULL_UPDOWN, GPIO_USART3_RX);
 }
 
 static void usart_setup(void) {
@@ -106,56 +117,57 @@ static void usart_setup(void) {
   usart_enable(USART2);
 }
 
-void usart3_isr(void) {
-  /* Check if we were called because of RXNE. */
-  if (((USART_CR1(MH_Z19_USART) & USART_CR1_RXNEIE) != 0) &&
-      ((USART_SR(MH_Z19_USART) & USART_SR_RXNE) != 0)) {
+void motorPinToggle(uint8_t state, uint32_t port, uint16_t pin) {
+  if (state)
+    gpio_set(port, pin);
+  else
+    gpio_clear(port, pin);
+}
 
-    /* Retrieve the data from the peripheral. */
-    mhz19_isrHandler(usart_recv(MH_Z19_USART));
+void motorStep(uint8_t state[4]) {
+  wchar_t buffer[50];
+  for (int i=0; i<4; i++) {
+    swprintf(buffer, 50, L"%d", state[i]);
+    pcd8544_drawText(i*8, 0, BLACK, buffer);
   }
+  motorPinToggle(state[0], MOTOR_PORTA, MOTOR_A0);
+  motorPinToggle(state[1], MOTOR_PORTA, MOTOR_A1);
+  motorPinToggle(state[2], MOTOR_PORTB, MOTOR_B0);
+  motorPinToggle(state[3], MOTOR_PORTB, MOTOR_B1);
 }
 
 int main(void) {
   clock_setup();
+  gpio_setup();
   pcd8544_setup();
   usart_setup();
-  mhz19_setup();
-
-  mhz19_init();
   pcd8544_init();
-  uint16_t scanPeriod = 0;
   wchar_t buffer[50];
-  printf("\nRAW SS, HH, LL, TT, Uh, Ul");
+  int8_t index = 0;
+  int8_t dirIndex = 1;
+  int8_t steps = 0;
 
   while (1) {
-    if (scanPeriod > 600) {
-      scanPeriod = 0;
-      mhz19_readConcentrationCmd();
-      MHZ19_RESPONSE *lResp = mhz19_lastResp();
-      pcd8544_clearDisplay();
-      if (lResp->SS != NOTVALIDREADING) {
-        swprintf(buffer, 50, L"Статус: 0x%02x", lResp->SS );
-        pcd8544_drawText(0, 0, BLACK, buffer);
-        swprintf(buffer, 50, L" %d ppm", mhz19_lastConcentration(0));
-        pcd8544_drawText(0, 8, BLACK, buffer);
-
-        swprintf(buffer, 50, L"Температура: %d C", mhz19_lastTempCelsius());
-        pcd8544_drawText(0, 16, BLACK, buffer);
-        swprintf(buffer, 50, L"CRC: [%d] %s", lResp->CS, (lResp->CS == mhz19_calcLastCrc()) ? "OK" : "CORRUPT");
-        pcd8544_drawText(0, 24, BLACK, buffer);
-      } else {
-        swprintf(buffer, 50, L"Недостоверные\nданные\nСтатус: %d", lResp->SS);
-        pcd8544_drawText(0, 0, BLACK, buffer);
-        swprintf(buffer, 50, L" %d ppm", mhz19_lastConcentration(0));
-        pcd8544_drawText(0, 24, BLACK, buffer);
-      }
-      printf("\nRAW: 0x%02X, %d, %d, %d, %d, %d // CO2 = %d",lResp->SS, lResp->HH, lResp->LL, lResp->TT, lResp->Uh, lResp->Ul, mhz19_lastConcentration(0) );
-     pcd8544_display();
-    } else {
-      scanPeriod++;
-    }
-    for (int i = 0; i < 200000; i++)
+    pcd8544_clearDisplay();
+    swprintf(buffer, 50, L"%d", index);
+    pcd8544_drawText(0, 40, BLACK, buffer);
+    motorStep(halfStep[index]);
+    pcd8544_display();
+    index+=dirIndex;
+    for (int i = 0; i < 1000000; i++)
         __asm__("nop");
+    if (dirIndex && index>7 )
+      index = 0;
+    else if (index<0)
+      index = 7;
+    steps += dirIndex;
+    if (steps>40) {
+      steps = 40;
+      dirIndex = dirIndex * -1;
+    } else if (steps<0) {
+      steps = 0;
+      dirIndex = dirIndex * -1;
+    }
   }
 }
+
